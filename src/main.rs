@@ -4,8 +4,8 @@ extern crate clap;
 extern crate exif;
 mod x3f;
 use self::x3f::read_x3f_time;
-use chrono::{DateTime, FixedOffset, NaiveDateTime};
-use chrono_tz::Tz;
+use chrono::{DateTime, Local, NaiveDateTime, TimeZone};
+use chrono_tz::{Tz, UTC};
 use clap::{App, Arg, ArgMatches};
 use exif::{Reader, Tag};
 use std::fs::File;
@@ -17,28 +17,22 @@ fn main() {
     let (from_tz, to_tz) = get_tz(&matches);
     let sources = matches.values_of("sources").unwrap();
     for filename in sources {
-        if filename.to_lowercase().ends_with(".x3f") {
-            match read_x3f_time(filename) {
-                Ok(odt) => match odt {
-                    Some(dt) => println!("{} -> {}", filename, dt),
-                    None => println!("{} -> none", filename),
-                },
-                Err(e) => {
-                    eprintln!("{}", e);
-                    process::exit(1);
-                }
-            }
+        let dt = if filename.to_lowercase().ends_with(".x3f") {
+            read_x3f_time(filename, from_tz)
         } else {
-            match read_exif_date_time_original(filename) {
-                Ok((odt, otz)) => match (odt, otz) {
-                    (Some(dt), Some(tz)) => println!("{} -> {} {:?}", filename, dt, tz),
-                    (Some(dt), None) => println!("{} -> {} none", filename, dt),
-                    (None, _) => println!("{} -> none none", filename),
+            read_exif_date_time_original(filename, from_tz)
+        };
+        match dt {
+            Ok(dt) => match dt {
+                Some(dt) => match to_tz {
+                    Some(tz) => println!("{} -> {}", filename, dt.with_timezone(&tz)),
+                    None => println!("{} -> {}", filename, dt.with_timezone(&Local)),
                 },
-                Err(e) => {
-                    eprintln!("{}", e);
-                    process::exit(1);
-                }
+                None => println!("{} -> none", filename),
+            },
+            Err(e) => {
+                eprintln!("{}", e);
+                process::exit(1);
             }
         }
     }
@@ -67,7 +61,8 @@ fn get_tz(matches: &ArgMatches) -> (Option<Tz>, Option<Tz>) {
 
 fn read_exif_date_time_original(
     filename: &str,
-) -> Result<(Option<NaiveDateTime>, Option<FixedOffset>), String> {
+    from_tz: Option<Tz>,
+) -> Result<(Option<DateTime<Tz>>), String> {
     let file = match File::open(filename) {
         Err(e) => return Err(e.to_string()),
         Ok(f) => f,
@@ -76,26 +71,26 @@ fn read_exif_date_time_original(
         Err(e) => return Err(e.to_string()),
         Ok(r) => r,
     };
-    if let Some(date_time_original) = reader.get_field(Tag::DateTimeOriginal, false) {
-        let dt_str = date_time_original
-            .value
-            .display_as(date_time_original.tag)
-            .to_string();
-        if let Some(offset_time_original) = reader.get_field(Tag::OffsetTimeOriginal, false) {
-            let dt_tz_str = format!(
-                "{}{}",
-                dt_str,
-                offset_time_original
-                    .value
-                    .display_as(offset_time_original.tag)
-            );
+    if let Some(dto) = reader.get_field(Tag::DateTimeOriginal, false) {
+        let dt_str = dto.value.display_as(dto.tag).to_string();
+        dbg!(&dt_str);
+        let naive_dt = NaiveDateTime::parse_from_str(&dt_str, "%Y-%m-%d %H:%M:%S").unwrap();
+        let utc: DateTime<Tz>;
+        if let Some(tz) = from_tz {
+            let dt = tz.from_local_datetime(&naive_dt).unwrap();
+            utc = dt.with_timezone(&UTC);
+        } else if let Some(oto) = reader.get_field(Tag::OffsetTimeOriginal, false) {
+            let dt_tz_str = format!("{}{}", dt_str, oto.value.display_as(oto.tag));
+            dbg!(&dt_tz_str);
             let dt = DateTime::parse_from_str(&dt_tz_str, "%Y-%m-%d %H:%M:%S%:z").unwrap();
-            return Ok((Some(dt.naive_local()), Some(dt.timezone())));
+            utc = dt.with_timezone(&UTC);
+        } else {
+            let dt = Local.from_local_datetime(&naive_dt).unwrap();
+            utc = dt.with_timezone(&UTC);
         }
-        let dt = NaiveDateTime::parse_from_str(&dt_str, "%Y-%m-%d %H:%M:%S").unwrap();
-        return Ok((Some(dt), None));
+        return Ok(Some(utc));
     }
-    return Ok((None, None));
+    return Ok(None);
 }
 
 fn app<'a, 'b>() -> App<'a, 'b> {
