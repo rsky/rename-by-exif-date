@@ -17,14 +17,16 @@ fn main() {
     let (from_tz, to_tz) = get_tz(&matches);
     let sources = matches.values_of("sources").unwrap();
     for filename in sources {
-        let dt: NaiveDateTime;
         if filename.to_lowercase().ends_with(".x3f") {
             match read_x3f_time(filename) {
                 Ok(odt) => match odt {
                     Some(dt) => println!("{} -> {}", filename, dt),
                     None => println!("{} -> none", filename),
                 },
-                Err(e) => eprintln!("{}", e),
+                Err(e) => {
+                    eprintln!("{}", e);
+                    process::exit(1);
+                }
             }
         } else {
             match read_exif_date_time_original(filename) {
@@ -33,7 +35,10 @@ fn main() {
                     (Some(dt), None) => println!("{} -> {} none", filename, dt),
                     (None, _) => println!("{} -> none none", filename),
                 },
-                Err(e) => eprintln!("{}", e),
+                Err(e) => {
+                    eprintln!("{}", e);
+                    process::exit(1);
+                }
             }
         }
     }
