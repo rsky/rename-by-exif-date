@@ -3,7 +3,6 @@ extern crate clap;
 use chrono_tz::Tz;
 use clap::{App, Arg, ArgMatches};
 use std::collections::HashSet;
-use std::path::Path;
 use std::process;
 
 pub fn app<'a, 'b>() -> App<'a, 'b> {
@@ -125,9 +124,9 @@ pub fn get_timezones(matches: &ArgMatches) -> (Option<Tz>, Option<Tz>) {
     };
 }
 
-pub fn get_filename_filter(matches: &ArgMatches) -> Box<dyn Fn(&Path) -> bool> {
+pub fn get_extension_filter(matches: &ArgMatches) -> Box<dyn Fn(&String) -> bool> {
     if !matches.is_present("extensions") {
-        return Box::new(|_: &Path| true);
+        return Box::new(|_: &String| true);
     }
 
     let extensions: HashSet<_> = matches
@@ -136,8 +135,5 @@ pub fn get_filename_filter(matches: &ArgMatches) -> Box<dyn Fn(&Path) -> bool> {
         .map(|ext| ext.to_lowercase())
         .collect();
 
-    return Box::new(move |path: &Path| match path.extension() {
-        Some(ext) => extensions.contains(&ext.to_str().unwrap().to_lowercase()),
-        None => false,
-    });
+    return Box::new(move |lcext: &String| extensions.contains(lcext));
 }
