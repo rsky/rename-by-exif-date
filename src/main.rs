@@ -8,6 +8,7 @@ use chrono::{DateTime, Local, NaiveDateTime, TimeZone};
 use chrono_tz::{Tz, UTC};
 use clap::{App, Arg, ArgMatches};
 use exif::{Reader, Tag};
+use std::collections::HashSet;
 use std::fs::File;
 use std::io::BufReader;
 use std::process;
@@ -16,6 +17,16 @@ fn main() {
     let matches = app().get_matches();
     let (from_tz, to_tz) = get_tz(&matches);
     let sources = matches.values_of("sources").unwrap();
+    let extensions: Option<HashSet<_>> = if matches.is_present("extensions") {
+        Some(matches
+            .values_of("extensions")
+            .unwrap()
+            .map(|ext| ext.to_lowercase())
+            .collect())
+    } else {
+        None
+    };
+    dbg!(extensions);
     for filename in sources {
         let dt = if filename.to_lowercase().ends_with(".x3f") {
             read_x3f_time(filename, from_tz)
@@ -125,11 +136,27 @@ fn app<'a, 'b>() -> App<'a, 'b> {
                 .short("d"),
         )
         .arg(
-            Arg::with_name("subdir-format")
-                .help("Specifies the format of the sub directory name")
-                .display_order(1)
-                .long("subdir-format")
+            Arg::with_name("dirname-format")
+                .help("Specifies the format of the directory name")
+                .display_order(0)
+                .long("dirname-format")
                 .default_value("%Y%m%d-%H%M%S"),
+        )
+        .arg(
+            Arg::with_name("filename-format")
+                .help("Specifies the format of the filename. (case insensitive and no dot)")
+                .display_order(1)
+                .long("filename-format")
+                .takes_value(true),
+        )
+        .arg(
+            Arg::with_name("extensions")
+                .help("Specifies the filename extension to handle.")
+                .display_order(2)
+                .long("ext")
+                .short("e")
+                .takes_value(true)
+                .multiple(true),
         )
         .arg(
             Arg::with_name("recursive")
@@ -140,7 +167,7 @@ fn app<'a, 'b>() -> App<'a, 'b> {
         .arg(
             Arg::with_name("collision")
                 .help("How to handle filename collision (FIXME)")
-                .display_order(2)
+                .display_order(4)
                 .long("collision")
                 .possible_values(&["overwrite", "skip", "serial", "abort"])
                 .default_value("overwrite"),
@@ -148,7 +175,7 @@ fn app<'a, 'b>() -> App<'a, 'b> {
         .arg(
             Arg::with_name("from-tz")
                 .help("FIXME")
-                .display_order(3)
+                .display_order(5)
                 .long("from-tz")
                 .takes_value(true)
                 .empty_values(false),
@@ -156,7 +183,7 @@ fn app<'a, 'b>() -> App<'a, 'b> {
         .arg(
             Arg::with_name("to-tz")
                 .help("FIXME")
-                .display_order(4)
+                .display_order(6)
                 .long("to-tz")
                 .takes_value(true)
                 .empty_values(false),
