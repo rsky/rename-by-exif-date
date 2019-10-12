@@ -17,15 +17,12 @@ pub fn read_exif_date_time_original(
         Ok(f) => f,
     };
 
-    let reader = match Reader::new(&mut BufReader::new(&file)) {
-        Err(e) => return Err(e.to_string()),
-        Ok(r) => r,
-    };
+    let reader = Reader::new(&mut BufReader::new(&file)).map_err(|e| e.to_string())?;
 
     return Ok(read_date_time_original_as_utc(&reader, from_tz));
 }
 
-fn read_date_time_original_as_utc(reader: &Reader, from_tz: Option<Tz>) -> Option<DateTime<Tz>> {
+pub fn read_date_time_original_as_utc(reader: &Reader, from_tz: Option<Tz>) -> Option<DateTime<Tz>> {
     let date_time_original = reader.get_field(Tag::DateTimeOriginal, false);
     if let Some(dto) = date_time_original {
         let offset_time_original = reader.get_field(Tag::OffsetTimeOriginal, false);
@@ -38,6 +35,7 @@ fn read_date_time_original_as_utc(reader: &Reader, from_tz: Option<Tz>) -> Optio
     return None;
 }
 
+#[inline]
 fn field_as_string(field: &exif::Field) -> String {
     return field.value.display_as(field.tag).to_string();
 }

@@ -1,6 +1,6 @@
 extern crate chrono;
 mod app;
-mod exif;
+pub mod exif;
 mod x3f;
 
 use self::app::{app, get_extension_filter, get_timezones};
