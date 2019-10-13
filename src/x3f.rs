@@ -17,7 +17,7 @@ use std::io::{self, BufReader, SeekFrom};
 
 pub fn read_x3f_time(filename: &str, from_tz: Option<Tz>) -> Result<Option<DateTime<Tz>>, String> {
     let file = File::open(filename).map_err(|e| e.to_string())?;
-    let reader = X3fPropReader::new(file, from_tz).map_err(|e| e.to_string())?;
+    let reader = X3fPropReader::new(BufReader::new(file), from_tz).map_err(|e| e.to_string())?;
     // Prefer EXIF rather than PROP.
     match reader.exif_datetime {
         Some(dt) => return Ok(Some(dt)),
