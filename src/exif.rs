@@ -12,13 +12,8 @@ pub fn read_exif_date_time_original(
     filename: &str,
     from_tz: Option<Tz>,
 ) -> Result<(Option<DateTime<Tz>>), String> {
-    let file = match File::open(filename) {
-        Err(e) => return Err(e.to_string()),
-        Ok(f) => f,
-    };
-
+    let file = File::open(filename).map_err(|e| e.to_string())?;
     let reader = Reader::new(&mut BufReader::new(&file)).map_err(|e| e.to_string())?;
-
     return Ok(read_date_time_original_as_utc(&reader, from_tz));
 }
 
@@ -27,8 +22,9 @@ pub fn read_date_time_original_as_utc(reader: &Reader, from_tz: Option<Tz>) -> O
     if let Some(dto) = date_time_original {
         let offset_time_original = reader.get_field(Tag::OffsetTimeOriginal, false);
         return Some(match (from_tz, offset_time_original) {
-            (Some(tz), _) => utc_date_time_original_with_timezone(&dto, &tz),
-            (None, Some(oto)) => utc_date_time_original_with_offset(&dto, &oto),
+            // If the `OffsetTimeOriginal` exists, prefer it rather than the `from_tz`.
+            (_, Some(oto)) => utc_date_time_original_with_offset(&dto, &oto),
+            (Some(tz), None) => utc_date_time_original_with_timezone(&dto, &tz),
             (None, None) => utc_date_time_original(&dto),
         });
     }
