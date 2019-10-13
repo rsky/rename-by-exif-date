@@ -338,26 +338,11 @@ impl<R: Read + Seek> X3fPropReader<R> {
     }
 
     fn read_bytes(&mut self, length: usize) -> Result<Vec<u8>, io::Error> {
-        const BUF_SIZE_L: usize = 1 << 16;
-        const BUF_SIZE_S: usize = 1 << 8;
-
         let mut buf = Vec::with_capacity(length);
-        let mut b1 = [0; BUF_SIZE_L];
-        let mut b2 = [0; BUF_SIZE_S];
-        let mut b3 = [0; 1];
-        for _ in 0..(length / BUF_SIZE_L) {
-            self.inner.read_exact(&mut b1)?;
-            buf.append(&mut b1.to_vec());
+        unsafe {
+            buf.set_len(length);
         }
-        for _ in 0..((length % BUF_SIZE_L) / BUF_SIZE_S) {
-            self.inner.read_exact(&mut b2)?;
-            buf.append(&mut b2.to_vec());
-        }
-        for _ in 0..(length % BUF_SIZE_S) {
-            self.inner.read_exact(&mut b3)?;
-            buf.push(b3[0]);
-        }
-        debug_assert_eq!(buf.len(), length);
+        self.inner.read_exact(&mut buf.as_mut_slice())?;
         return Ok(buf);
     }
 
