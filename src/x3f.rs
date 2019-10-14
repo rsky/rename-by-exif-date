@@ -49,8 +49,8 @@ struct X3fImage {
 
 #[derive(Debug)]
 struct X3fPropertyEntry {
-    name_offset: u32,
-    value_offset: u32,
+    name_offset: usize,
+    value_offset: usize,
 }
 
 #[derive(Debug)]
@@ -288,10 +288,8 @@ impl<R: Read + Seek> X3fReader<R> {
 
         // Read properties.
         let entries = self.read_property_entries(num_entries)?;
-        let props = self.read_properties(num_entries as usize, total_length as usize)?;
+        let props = self.read_properties(&entries, total_length as usize)?;
         dbg!(&entries, &props);
-        debug_assert_eq!(entries.len(), props.len());
-        debug_assert_eq!(entries[0].value_offset - 1, props[0].name.len() as u32);
 
         Ok(props)
     }
@@ -305,8 +303,8 @@ impl<R: Read + Seek> X3fReader<R> {
             let name_offset = self.read_u32()?;
             let value_offset = self.read_u32()?;
             let entry = X3fPropertyEntry {
-                name_offset,
-                value_offset,
+                name_offset: name_offset as usize,
+                value_offset: value_offset as usize,
             };
             entries.push(entry);
         }
@@ -315,7 +313,7 @@ impl<R: Read + Seek> X3fReader<R> {
 
     fn read_properties(
         &mut self,
-        num_entries: usize,
+        entries: &Vec<X3fPropertyEntry>,
         num_characters: usize,
     ) -> Result<Vec<X3fProperty>, io::Error> {
         // Read whole properties as bytes and convert it to string.
@@ -324,14 +322,16 @@ impl<R: Read + Seek> X3fReader<R> {
         let mut dst_vec = vec_with_length(num_characters);
         let mut dst = dst_vec.as_mut_slice();
         LittleEndian::read_u16_into(&src, &mut dst);
-        let all_props = String::from_utf16(&dst).unwrap();
 
         // Make a property list.
         let mut props = Vec::new();
-        let flatten_props: Vec<&str> = all_props.split('\0').collect();
-        for pos in 0..num_entries {
-            let name = flatten_props[pos * 2].to_owned();
-            let value = flatten_props[pos * 2 + 1].to_owned();
+        for entry in entries.iter() {
+            let name_ptr = &dst[entry.name_offset..];
+            let name_len = name_ptr.iter().position(|c| *c == 0_u16).unwrap_or_default();
+            let name = String::from_utf16(&name_ptr[..name_len]).unwrap_or_default();
+            let value_ptr = &dst[entry.value_offset..];
+            let value_len = value_ptr.iter().position(|c| *c == 0_u16).unwrap_or_default();
+            let value = String::from_utf16(&value_ptr[..value_len]).unwrap_or_default();
             props.push(X3fProperty { name, value });
         }
         Ok(props)
