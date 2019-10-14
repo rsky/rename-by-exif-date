@@ -10,33 +10,20 @@ use chrono_tz::{Tz, UTC};
 use derivative::Derivative;
 use exif::Reader;
 use std::cmp::Ordering;
-use std::collections::HashMap;
+use std::default::Default;
 use std::fs::File;
 use std::io::prelude::*;
 use std::io::{self, BufReader, SeekFrom};
 
 pub fn read_x3f_time(filename: &str, from_tz: Option<Tz>) -> Result<Option<DateTime<Tz>>, String> {
     let file = File::open(filename).map_err(|e| e.to_string())?;
-    let reader = X3fPropReader::new(BufReader::new(file), from_tz).map_err(|e| e.to_string())?;
-    // Prefer EXIF rather than PROP.
-    match reader.exif_datetime {
-        Some(dt) => return Ok(Some(dt)),
-        None => {
-            match reader.props.get("TIME") {
-                Some(time_str) => {
-                    // UNIX timestamp is timezone independent, so from_tz is ignored.
-                    let timestamp = time_str.parse::<i64>().map_err(|e| e.to_string())?;
-                    return Ok(Some(Utc.timestamp(timestamp, 0).with_timezone(&UTC)));
-                }
-                None => return Ok(None),
-            }
-        }
-    }
+    let reader = X3fReader::new(BufReader::new(file), from_tz).map_err(|e| e.to_string())?;
+    Ok(reader.get_taken_datetime())
 }
 
-struct X3fPropReader<R: Read + Seek> {
+struct X3fReader<R: Read + Seek> {
     inner: R,
-    props: HashMap<String, String>,
+    properties: Vec<X3fProperty>,
     exif_datetime: Option<DateTime<Tz>>,
     from_tz: Option<Tz>,
 }
@@ -78,20 +65,43 @@ impl X3fImage {
     }
 }
 
-impl<R: Read + Seek> X3fPropReader<R> {
+impl<R: Read + Seek> X3fReader<R> {
     pub fn new(inner: R, from_tz: Option<Tz>) -> Result<Self, X3fError> {
-        let mut reader = X3fPropReader {
+        let mut reader = X3fReader {
             inner,
-            props: HashMap::new(),
+            properties: Default::default(),
             exif_datetime: None,
             from_tz,
         };
-        reader.read_props()?;
-
-        return Ok(reader);
+        reader.read()?;
+        Ok(reader)
     }
 
-    fn read_props(&mut self) -> Result<(), X3fError> {
+    fn get_property(&self, name: &str) -> Option<&String> {
+        // This may be an inefficient method, but it shouldn't be a problem in the regular case.
+        self.properties
+            .iter()
+            .find(|p| p.name == name)
+            .map(|p| &p.value)
+    }
+
+    fn get_taken_datetime(&self) -> Option<DateTime<Tz>> {
+        // Prefer Exif::DateTimeOrigial rather than PROP::TIME.
+        match self.exif_datetime {
+            Some(dt) => Some(dt),
+            None => match self.get_property("TIME") {
+                Some(time_str) => {
+                    // Since the time zone of the Sigma camera's internal clock is UTC,
+                    // there may be a time difference from the user's perception.
+                    let timestamp = time_str.parse::<i64>().unwrap();
+                    Some(Utc.timestamp(timestamp, 0).with_timezone(&UTC))
+                }
+                None => None,
+            },
+        }
+    }
+
+    fn read(&mut self) -> Result<(), X3fError> {
         self.check_identifier()?;
 
         let dir_entries = self.read_directory_entries()?;
@@ -101,7 +111,7 @@ impl<R: Read + Seek> X3fPropReader<R> {
             let offset = entry.offset as u64;
             let length = entry.length as u64;
             match entry.name.as_str() {
-                "CAMF" => { /* UNSUPPORTED */ }
+                "CAMF" => { /* TODO */ }
                 "IMAG" => { /* UNSUPPORTED */ }
                 "IMA2" => {
                     let image = self.read_image(offset, length)?;
@@ -112,17 +122,12 @@ impl<R: Read + Seek> X3fPropReader<R> {
                         }
                     }
                 }
-                "PROP" => {
-                    let props = self.read_property_list(offset)?;
-                    for p in props.iter() {
-                        self.props.insert(p.name.clone(), p.value.clone());
-                    }
-                }
+                "PROP" => self.properties = self.read_property_list(offset)?,
                 _ => {}
             }
         }
 
-        return Ok(());
+        Ok(())
     }
 
     fn check_identifier(&mut self) -> Result<(), X3fError> {
@@ -140,7 +145,7 @@ impl<R: Read + Seek> X3fPropReader<R> {
         let fovb_version_str = format!("{:08x}", version);
         dbg!(fovb_version_str);
 
-        return Ok(());
+        Ok(())
     }
 
     fn check_directory(&mut self) -> Result<u32, X3fError> {
@@ -166,7 +171,7 @@ impl<R: Read + Seek> X3fPropReader<R> {
 
         // Read the number of the directory entries.
         let num_entries = self.read_u32()?;
-        return Ok(num_entries);
+        Ok(num_entries)
     }
 
     fn read_directory_entries(&mut self) -> Result<Vec<X3fDirectoryEntry>, X3fError> {
@@ -187,22 +192,19 @@ impl<R: Read + Seek> X3fPropReader<R> {
             };
             entries.push(entry);
         }
-        return Ok(entries);
+        Ok(entries)
     }
 
     fn read_directory_offset(&mut self) -> Result<u64, io::Error> {
         self.inner.seek(SeekFrom::End(-4))?;
         let offset = self.read_u32()?;
-        return Ok(offset as u64);
+        Ok(offset as u64)
     }
 
     fn read_datetime_from_thumbnail(&self, image: &X3fImage) -> Option<DateTime<Tz>> {
         match Reader::new(&mut BufReader::new(image.data.as_slice())) {
             Ok(reader) => read_date_time_original_as_utc(&reader, self.from_tz),
-            Err(e) => {
-                dbg!(e);
-                return None;
-            }
+            Err(e) => { dbg!(e); None }
         }
     }
 
@@ -240,7 +242,7 @@ impl<R: Read + Seek> X3fPropReader<R> {
             columns,
             rows,
             row_stride,
-            data: Vec::new(),
+            data: Default::default(),
         };
 
         // Read the image data if it is a JPEG thumbnail.
@@ -249,7 +251,7 @@ impl<R: Read + Seek> X3fPropReader<R> {
             image_data.data = self.read_bytes(data_size)?;
         }
 
-        return Ok(image_data);
+        Ok(image_data)
     }
 
     fn read_property_list(&mut self, offset: u64) -> Result<Vec<X3fProperty>, X3fError> {
@@ -290,7 +292,7 @@ impl<R: Read + Seek> X3fPropReader<R> {
         debug_assert_eq!(entries.len(), props.len());
         debug_assert_eq!(entries[0].value_offset - 1, props[0].name.len() as u32);
 
-        return Ok(props);
+        Ok(props)
     }
 
     fn read_property_entries(
@@ -307,7 +309,7 @@ impl<R: Read + Seek> X3fPropReader<R> {
             };
             entries.push(entry);
         }
-        return Ok(entries);
+        Ok(entries)
     }
 
     fn read_properties(
@@ -334,7 +336,7 @@ impl<R: Read + Seek> X3fPropReader<R> {
             let value = flatten_props[pos * 2 + 1].to_owned();
             props.push(X3fProperty { name, value });
         }
-        return Ok(props);
+        Ok(props)
     }
 
     fn read_bytes(&mut self, length: usize) -> Result<Vec<u8>, io::Error> {
@@ -343,7 +345,7 @@ impl<R: Read + Seek> X3fPropReader<R> {
             buf.set_len(length);
         }
         self.inner.read_exact(&mut buf.as_mut_slice())?;
-        return Ok(buf);
+        Ok(buf)
     }
 
     //#[inline]
