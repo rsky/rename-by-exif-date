@@ -137,7 +137,7 @@ impl<R: Read + Seek> X3fReader<R> {
         let mut buf = [0; 4];
         self.inner.read_exact(&mut buf)?;
         if buf.cmp(&b"FOVb") != Ordering::Equal {
-            return Err(X3fError::Format("Not a X3F (FOVb) file".to_owned()));
+            return Err(X3fError::InvalidData("Not a X3F (FOVb) file"));
         }
 
         // Read the version of X3F.
@@ -158,7 +158,7 @@ impl<R: Read + Seek> X3fReader<R> {
         let mut buf = [0; 4];
         self.inner.read_exact(&mut buf)?;
         if buf.cmp(&b"SECd") != Ordering::Equal {
-            return Err(X3fError::Format("SECd not found".to_owned()));
+            return Err(X3fError::InvalidData("SECd not found"));
         }
 
         // Verify the section version.
@@ -166,7 +166,7 @@ impl<R: Read + Seek> X3fReader<R> {
         let secd_version_str = format!("{:08x}", version);
         dbg!(secd_version_str);
         if version != 0x20000 {
-            return Err(X3fError::Format("Unsupported SECd version".to_owned()));
+            return Err(X3fError::InvalidData("Unsupported SECd version"));
         }
 
         // Read the number of the directory entries.
@@ -204,7 +204,10 @@ impl<R: Read + Seek> X3fReader<R> {
     fn read_datetime_from_thumbnail(&self, image: &X3fImage) -> Option<DateTime<Tz>> {
         match Reader::new(&mut BufReader::new(image.data.as_slice())) {
             Ok(reader) => read_date_time_original_as_utc(&reader, self.from_tz),
-            Err(e) => { dbg!(e); None }
+            Err(e) => {
+                dbg!(e);
+                None
+            }
         }
     }
 
@@ -218,7 +221,7 @@ impl<R: Read + Seek> X3fReader<R> {
         let mut buf = [0; 4];
         self.inner.read_exact(&mut buf)?;
         if buf.cmp(&b"SECi") != Ordering::Equal {
-            return Err(X3fError::Format("SECi not found".to_owned()));
+            return Err(X3fError::InvalidData("SECi not found"));
         }
 
         // Verify the section version.
@@ -226,7 +229,7 @@ impl<R: Read + Seek> X3fReader<R> {
         let seci_version_str = format!("{:08x}", version);
         dbg!(seci_version_str);
         if version != 0x20000 {
-            return Err(X3fError::Format("Unsupported SECi version".to_owned()));
+            return Err(X3fError::InvalidData("Unsupported SECi version"));
         }
 
         // Read the image properties.
@@ -262,7 +265,7 @@ impl<R: Read + Seek> X3fReader<R> {
         let mut buf = [0; 4];
         self.inner.read_exact(&mut buf)?;
         if buf.cmp(&b"SECp") != Ordering::Equal {
-            return Err(X3fError::Format("SECp not found".to_owned()));
+            return Err(X3fError::InvalidData("SECp not found"));
         }
 
         // Verify the section version.
@@ -270,7 +273,7 @@ impl<R: Read + Seek> X3fReader<R> {
         let secp_version_str = format!("{:08x}", version);
         dbg!(secp_version_str);
         if version != 0x20000 {
-            return Err(X3fError::Format("Unsupported SECp version".to_owned()));
+            return Err(X3fError::InvalidData("Unsupported SECp version"));
         }
 
         // Read the property list information.
@@ -280,9 +283,7 @@ impl<R: Read + Seek> X3fReader<R> {
         let total_length = self.read_u32()?;
         dbg!(num_entries, character_encoding, total_length);
         if character_encoding != 0 {
-            return Err(X3fError::Format(
-                "Unsupported SECp character encoding".to_owned(),
-            ));
+            return Err(X3fError::InvalidData( "Unsupported SECp character encoding"));
         }
 
         // Read properties.
@@ -320,10 +321,7 @@ impl<R: Read + Seek> X3fReader<R> {
         // Read whole properties as bytes and convert it to string.
         let src_vec = self.read_bytes(num_characters * 2)?;
         let src = src_vec.as_slice();
-        let mut dst_vec = Vec::<u16>::with_capacity(num_characters);
-        unsafe {
-            dst_vec.set_len(num_characters);
-        }
+        let mut dst_vec = vec_with_length(num_characters);
         let mut dst = dst_vec.as_mut_slice();
         LittleEndian::read_u16_into(&src, &mut dst);
         let all_props = String::from_utf16(&dst).unwrap();
@@ -340,18 +338,10 @@ impl<R: Read + Seek> X3fReader<R> {
     }
 
     fn read_bytes(&mut self, length: usize) -> Result<Vec<u8>, io::Error> {
-        let mut buf = Vec::with_capacity(length);
-        unsafe {
-            buf.set_len(length);
-        }
+        let mut buf = vec_with_length(length);
         self.inner.read_exact(&mut buf.as_mut_slice())?;
         Ok(buf)
     }
-
-    //#[inline]
-    //fn read_u16(&mut self) -> Result<u16, io::Error> {
-    //    self.inner.read_u16::<LittleEndian>()
-    //}
 
     #[inline]
     fn read_u32(&mut self) -> Result<u32, io::Error> {
@@ -369,17 +359,24 @@ impl<R: Read + Seek> X3fReader<R> {
     }
 }
 
+#[inline]
+fn vec_with_length<T>(length: usize) -> Vec<T> {
+    let mut v = Vec::with_capacity(length);
+    unsafe { v.set_len(length) }
+    v
+}
+
 #[derive(Debug)]
 enum X3fError {
     Io(io::Error),
-    Format(String),
+    InvalidData(&'static str),
 }
 
 impl std::fmt::Display for X3fError {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match *self {
             X3fError::Io(ref err) => err.fmt(f),
-            X3fError::Format(ref s) => write!(f, "{}", s),
+            X3fError::InvalidData(ref s) => write!(f, "{}", *s),
         }
     }
 }
@@ -388,7 +385,7 @@ impl std::error::Error for X3fError {
     fn description(&self) -> &str {
         match *self {
             X3fError::Io(ref err) => err.description(),
-            X3fError::Format(ref s) => s,
+            X3fError::InvalidData(ref s) => *s,
         }
     }
 
@@ -403,11 +400,5 @@ impl std::error::Error for X3fError {
 impl From<io::Error> for X3fError {
     fn from(err: io::Error) -> X3fError {
         X3fError::Io(err)
-    }
-}
-
-impl From<String> for X3fError {
-    fn from(err: String) -> X3fError {
-        X3fError::Format(err)
     }
 }
