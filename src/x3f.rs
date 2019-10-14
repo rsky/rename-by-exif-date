@@ -214,23 +214,8 @@ impl<R: Read + Seek> X3fReader<R> {
     fn read_image(&mut self, offset: u64, length: u64) -> Result<X3fImage, X3fError> {
         const IMAGE_HEADER_SIZE: usize = 28;
 
-        // Go to the image section.
         self.seek_to(offset)?;
-
-        // Verify the section identifiers.
-        let mut buf = [0; 4];
-        self.inner.read_exact(&mut buf)?;
-        if buf.cmp(&b"SECi") != Ordering::Equal {
-            return Err(X3fError::InvalidData("SECi not found"));
-        }
-
-        // Verify the section version.
-        let version = self.read_u32()?;
-        let seci_version_str = format!("{:08x}", version);
-        dbg!(seci_version_str);
-        if version != 0x20000 {
-            return Err(X3fError::InvalidData("Unsupported SECi version"));
-        }
+        self.check_image_header()?;
 
         // Read the image properties.
         let image_type = self.read_u32()?;
@@ -257,10 +242,48 @@ impl<R: Read + Seek> X3fReader<R> {
         Ok(image_data)
     }
 
-    fn read_property_list(&mut self, offset: u64) -> Result<Vec<X3fProperty>, X3fError> {
-        // Go to the property list section.
-        self.seek_to(offset)?;
+    fn check_image_header(&mut self) -> Result<(), X3fError> {
+        // Verify the section identifiers.
+        let mut buf = [0; 4];
+        self.inner.read_exact(&mut buf)?;
+        if buf.cmp(&b"SECi") != Ordering::Equal {
+            return Err(X3fError::InvalidData("SECi not found"));
+        }
 
+        // Verify the section version.
+        let version = self.read_u32()?;
+        let seci_version_str = format!("{:08x}", version);
+        dbg!(seci_version_str);
+        if version != 0x20000 {
+            return Err(X3fError::InvalidData("Unsupported SECi version"));
+        }
+
+        Ok(())
+    }
+
+    fn read_property_list(&mut self, offset: u64) -> Result<Vec<X3fProperty>, X3fError> {
+        self.seek_to(offset)?;
+        self.check_property_list_header()?;
+
+        // Read the property list information.
+        let num_entries = self.read_u32()?;
+        let character_encoding = self.read_u32()?;
+        self.seek_by(4)?; // skip reserved
+        let total_length = self.read_u32()?;
+        dbg!(num_entries, character_encoding, total_length);
+        if character_encoding != 0 {
+            return Err(X3fError::InvalidData("Unsupported SECp character encoding"));
+        }
+
+        // Read properties.
+        let entries = self.read_property_entries(num_entries)?;
+        let props = self.read_properties(&entries, total_length as usize)?;
+        dbg!(&entries, &props);
+
+        Ok(props)
+    }
+
+    fn check_property_list_header(&mut self) -> Result<(), X3fError> {
         // Verify the section identifiers.
         let mut buf = [0; 4];
         self.inner.read_exact(&mut buf)?;
@@ -276,22 +299,7 @@ impl<R: Read + Seek> X3fReader<R> {
             return Err(X3fError::InvalidData("Unsupported SECp version"));
         }
 
-        // Read the property list information.
-        let num_entries = self.read_u32()?;
-        let character_encoding = self.read_u32()?;
-        self.seek_by(4)?; // skip reserved
-        let total_length = self.read_u32()?;
-        dbg!(num_entries, character_encoding, total_length);
-        if character_encoding != 0 {
-            return Err(X3fError::InvalidData( "Unsupported SECp character encoding"));
-        }
-
-        // Read properties.
-        let entries = self.read_property_entries(num_entries)?;
-        let props = self.read_properties(&entries, total_length as usize)?;
-        dbg!(&entries, &props);
-
-        Ok(props)
+        Ok(())
     }
 
     fn read_property_entries(
@@ -300,13 +308,12 @@ impl<R: Read + Seek> X3fReader<R> {
     ) -> Result<Vec<X3fPropertyEntry>, io::Error> {
         let mut entries = Vec::new();
         for _ in 0..num_entries {
-            let name_offset = self.read_u32()?;
-            let value_offset = self.read_u32()?;
-            let entry = X3fPropertyEntry {
-                name_offset: name_offset as usize,
-                value_offset: value_offset as usize,
-            };
-            entries.push(entry);
+            let name_offset = self.read_u32()? as usize;
+            let value_offset = self.read_u32()? as usize;
+            entries.push(X3fPropertyEntry {
+                name_offset,
+                value_offset,
+            });
         }
         Ok(entries)
     }
@@ -326,12 +333,8 @@ impl<R: Read + Seek> X3fReader<R> {
         // Make a property list.
         let mut props = Vec::new();
         for entry in entries.iter() {
-            let name_ptr = &dst[entry.name_offset..];
-            let name_len = name_ptr.iter().position(|c| *c == 0_u16).unwrap_or_default();
-            let name = String::from_utf16(&name_ptr[..name_len]).unwrap_or_default();
-            let value_ptr = &dst[entry.value_offset..];
-            let value_len = value_ptr.iter().position(|c| *c == 0_u16).unwrap_or_default();
-            let value = String::from_utf16(&value_ptr[..value_len]).unwrap_or_default();
+            let name = extract_utf16_string(&dst, entry.name_offset);
+            let value = extract_utf16_string(&dst, entry.value_offset);
             props.push(X3fProperty { name, value });
         }
         Ok(props)
@@ -364,6 +367,13 @@ fn vec_with_length<T>(length: usize) -> Vec<T> {
     let mut v = Vec::with_capacity(length);
     unsafe { v.set_len(length) }
     v
+}
+
+#[inline]
+fn extract_utf16_string(raw: &[u16], offset: usize) -> String {
+    let ptr = &raw[offset..];
+    let len = ptr.iter().position(|c| *c == 0_u16).unwrap_or_default();
+    String::from_utf16(&ptr[..len]).unwrap_or_default()
 }
 
 #[derive(Debug)]
